@@ -23,7 +23,7 @@ module mctc_io_read_xyz
    implicit none
    private
 
-   public :: read_xyz
+   public :: read_xyz, read_coord
 
 
 contains
@@ -131,6 +131,153 @@ subroutine read_xyz(self, unit, error)
    if (len(comment) > 0) self%comment = comment
 
 end subroutine read_xyz
+
+
+! returns 4d array with coordinates of different structures but
+! does not create structure object
+subroutine read_coord(structures, unit, error,nf)
+
+   !> Instance of the molecular structure data
+   ! type(structure_type), intent(out) :: self
+
+   !> array of coordinates
+   real(wp), allocatable, intent(out):: structures(:,:,:)
+   
+   !> File handle
+   integer, intent(in) :: unit
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error ! why allocatable?
+
+   integer,intent(out) :: nf
+
+   integer :: ii, n, iat, stat, pos, lnum, nlines, jj
+   real(wp) :: x, y, z, conv
+   real(wp), allocatable :: xyz(:, :)
+   type(token_type) :: token, tsym, tnat
+   character(len=symbol_length) :: chdum
+   character(len=symbol_length), allocatable :: sym(:)
+   character(len=:), allocatable :: line, comment, fline
+   integer  :: err
+   ! character(len=:), allocatable :: iomsg
+
+   conv = aatoau
+   lnum = 0
+
+   ! read number of atoms in one frame (n)
+   call next_line(unit, fline, pos, lnum, stat)
+   call read_next_token(fline, pos, tnat, n, stat)
+   if (stat /= 0) then
+      call io_error(error, "Could not read number of atoms", &
+         & fline, tnat, filename(unit), lnum, "expected integer value")
+      return
+   end if
+
+   if (n.lt.1) then
+      call io_error(error, "Impossible number of atoms provided", &
+         & fline, tnat, filename(unit), lnum, "expected positive integer value")
+      return
+   end if
+
+   ! read number of lines in file and calc number of frames (nf)
+   rewind(unit,iostat=err)
+   if (err.ne.0) then
+      ! iomsg = "Error with REWIND implementation (first)"
+      write(*,*) "Error with REWIND implementation (first)"
+      return
+   endif
+   nlines = 0
+   do while (err.ge.0)
+      read(unit,'(a)',iostat=err)
+      nlines = nlines+1
+   enddo
+   rewind(unit,iostat=err)
+   if (err.ne.0) then
+      ! iomsg = "Error with REWIND implementation (second)"
+      write(*,*) "Error with REWIND implementation (second)"
+      return
+   end if
+   nf = int(nlines/(n+2)) ! must be integer
+
+   ! allocate memory for xyz array
+   allocate(structures(3, n, nf))
+   allocate(sym(n))
+
+   ! next record is a comment | read from beginning
+   ! call next_line(unit, comment, pos, lnum, stat)
+   ! call next_line(unit, comment, pos, lnum, stat)
+   ! if (stat /= 0) then
+   !    call io_error(error, "Unexpected end of file", &
+   !       & "", token_type(0, 0), filename(unit), lnum+1, "expected value")
+   !    return
+   ! end if
+
+   
+   jj = 0
+
+   do while (stat.ge.0)
+      call next_line(unit, comment, pos, lnum, stat)
+      if (stat.lt.0) exit
+      call next_line(unit, comment, pos, lnum, stat)
+      if (stat.lt.0) exit
+      jj = jj + 1
+      ii = 0
+      do while (ii < n)
+         call next_line(unit, line, pos, lnum, stat)
+         if (is_iostat_end(stat)) exit
+         if (stat /= 0) then
+            call io_error(error, "Could not read geometry from xyz file", &
+               & "", token_type(0, 0), filename(unit), lnum+1, "expected value")
+            return
+         end if
+         call next_token(line, pos, tsym)
+         if (stat == 0) &
+            call read_next_token(line, pos, token, x, stat)
+         if (stat == 0) &
+            call read_next_token(line, pos, token, y, stat)
+         if (stat == 0) &
+            call read_next_token(line, pos, token, z, stat)
+         if (stat /= 0) then
+            call io_error(error, "Could not parse coordinates from xyz file", &
+               & line, token, filename(unit), lnum, "expected real value")
+            return
+         end if
+
+         ! Adjust the token length to faithfully report the used chars in case of an error
+         tsym%last = min(tsym%last, tsym%first + symbol_length - 1)
+         chdum = line(tsym%first:tsym%last)
+         iat = to_number(chdum)
+         if (iat <= 0) then
+            read(chdum, *, iostat=stat) iat
+            if (stat == 0) then
+               chdum = to_symbol(iat)
+            else
+               iat = 0
+            end if
+         end if
+         if (iat > 0) then
+            ii = ii+1
+            sym(ii) = trim(chdum)
+            structures(:, ii, jj) = [x, y, z]*conv
+         else
+            call io_error(error, "Cannot map symbol to atomic number", &
+               & line, tsym, filename(unit), lnum, "unknown element")
+            return
+         end if
+      end do
+
+      if (ii /= n) then
+         call io_error(error, "Atom number missmatch in xyz file", &
+            & fline, tnat, filename(unit), 1, "found "//to_string(ii)//" atoms in input")
+         return
+      end if
+   end do
+   ! call new(self, sym, xyz)
+   ! if (len(comment) > 0) self%comment = comment
+
+end subroutine read_coord
+
+
 
 
 end module mctc_io_read_xyz
